@@ -444,10 +444,10 @@ def footprint_signature(streams):
     return digest.digest()
 
 
-def rename_footprint(streams, name):
+def rename_footprint(streams, name, *, section=None):
     source = component_section(streams)
     previous_name = Reader(streams[source + '/Data']).string()
-    section = _component_section(name)
+    section = _component_section(name) if section is None else section
     result = {}
     for path, payload in streams.items():
         if path.startswith(source + '/'):
@@ -480,10 +480,11 @@ def indexed_component(index, name):
 def plan_footprints(entries, original=None, check_cancelled=lambda: None):
     """Prefer an equivalent existing footprint; emit a shared new footprint once."""
     known, reserved = {}, {'library', 'fileheader', 'sectionkeys', 'storage'}
+    reserved_sections = set(reserved)
     if original is not None:
         old = LibraryIndex(original, 'PCBLIB')
         try:
-            reserved.update(old.roots)
+            reserved_sections.update(old.roots)
             reserved.update(name_key(name) for name in old.names)
             for name in old.names:
                 check_cancelled()
@@ -492,7 +493,7 @@ def plan_footprints(entries, original=None, check_cancelled=lambda: None):
                     known.setdefault(signature, name)
         finally:
             old.ole.close()
-    planned, names, emitted, reused, conflicts = [], {}, set(), 0, 0
+    planned, names, emitted, reused, conflicts, aliases = [], {}, set(), 0, 0, 0
     for identity, name, streams in entries:
         check_cancelled()
         signature = footprint_signature(streams)
@@ -500,17 +501,22 @@ def plan_footprints(entries, original=None, check_cancelled=lambda: None):
         if target is not None:
             reused += 1
         else:
-            conflicts += name[:31].casefold() in reserved
-            target = unique_name(name, reserved)
+            conflicts += name.casefold() in reserved
+            target = unique_name(name, reserved, limit=255)
             reserved.add(target.casefold())
             if signature is not None:
                 known[signature] = target
         names[identity] = target
         if name_key(target) not in emitted:
-            planned.append((identity, target, rename_footprint(streams, target)))
+            # Display names and CFB directories have separate limits and
+            # collision domains. Long names may share their first 31 chars.
+            section = unique_name(_component_section(target), reserved_sections)
+            reserved_sections.add(section.casefold())
+            aliases += section != target
+            planned.append((identity, target, rename_footprint(streams, target, section=section)))
             emitted.add(name_key(target))
     log_event('INFO', 'library.footprint_reuse', count=len(entries), unique=len(planned), reused=reused,
-              name_conflicts=conflicts, existing_library=original is not None)
+              name_conflicts=conflicts, section_aliases=aliases, existing_library=original is not None)
     return planned, names, reused
 
 

@@ -65,7 +65,9 @@ class MergeTests(unittest.TestCase):
             self.assertEqual(sections.unpack('<I')[0], 3)
             for part, name in zip(self.parts, names):
                 self.assertEqual(Reader(sections.block()[1]).string(), name)
-                self.assertEqual(Reader(sections.block()[1]).string(), name)
+                section = Reader(sections.block()[1]).string()
+                self.assertLessEqual(len(section.encode('utf-16le')), 62)
+                self.assertEqual(section, merged_pcb_section(board, part))
         for index, part in enumerate(self.parts):
             header, records, pins = schematic(sch, part + '_Symbol')
             old_header, old_records, old_pins = schematic(export_schlib(self.data[part], part))

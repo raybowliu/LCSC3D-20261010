@@ -17,7 +17,7 @@ from altium_inspect import schematic, pcb
 from lcsc3d.core.app_logging import close_logging
 from lcsc3d.eda.compound_storage import compound_file
 from lcsc3d.core.errors import DownloadError
-from lcsc3d.eda.library_merge import LibraryIndex, append_library, footprint_signature, Reader, parameters
+from lcsc3d.eda.library_merge import LibraryIndex, append_library, footprint_signature, component_section, Reader, parameters
 from test_backend import STEP
 
 
@@ -206,18 +206,19 @@ class ExportIntegrityTests(unittest.TestCase):
 
     def test_physical_side_data_and_unknown_native_data_are_not_discarded_as_duplicates(self):
         name, streams = _pcblib_component(self.data['C20197'], 'C20197', lambda: None, merged=True)
+        section = component_section(streams)
         baseline = footprint_signature(streams)
         for variant in ('height', 'extra_stream', 'unknown_record', 'text'):
             with self.subTest(variant=variant):
                 changed = dict(streams)
                 if variant == 'height':
-                    changed[name + '/Parameters'] = changed[name + '/Parameters'].replace(b'0mil', b'1mil')
+                    changed[section + '/Parameters'] = changed[section + '/Parameters'].replace(b'0mil', b'1mil')
                 elif variant == 'extra_stream':
-                    changed[name + '/Custom'] = b'preserve this data'
+                    changed[section + '/Custom'] = b'preserve this data'
                 elif variant == 'unknown_record':
-                    changed[name + '/Data'] += b'\x0c' + _parameters({'ID': '3D body'})
+                    changed[section + '/Data'] += b'\x0c' + _parameters({'ID': '3D body'})
                 else:
-                    changed[name + '/WideStrings'] = _parameters({'ENCODEDTEXT0': '65'})
+                    changed[section + '/WideStrings'] = _parameters({'ENCODEDTEXT0': '65'})
                 self.assertNotEqual(footprint_signature(changed), baseline)
 
     def test_direct_append_reuses_equivalent_renamed_footprint(self):

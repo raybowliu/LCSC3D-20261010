@@ -309,8 +309,8 @@ def _pcblib_component(data, part, check_cancelled, *, merged=False, footprint_na
 
 
 def merged_name(name, part):
-    """Use the footprint name, without a supplier number, within storage limits."""
-    return _section(_library_name(name, part))
+    """Keep the indexed name; SectionKeys maps it to a short CFB directory."""
+    return _library_name(name, part)
 
 
 class MergedLibrary:
