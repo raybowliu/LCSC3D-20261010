@@ -13,9 +13,15 @@ from lcsc3d.core.app_logging import log_event, record_error
 from lcsc3d.core.errors import DownloadError
 from lcsc3d.core.i18n import text as ui_text
 
-SUFFIXES = {'.schlib', '.pcblib', '.prjpcb'}
+SUFFIXES = {'.schlib', '.pcblib', '.prjpcb', '.kicad_sym', '.kicad_mod', '.kicad_pro',
+            '.sym-lib-table', '.fp-lib-table'}
 MAX_BYTES = 512 * 1024 * 1024
 LOCK = threading.RLock()
+
+
+def backup_suffix(path):
+    name = path.name.lower()
+    return '.' + name if name in ('sym-lib-table', 'fp-lib-table') else path.suffix.lower()
 
 
 def backup_directory():
@@ -90,7 +96,7 @@ def list_backups():
                     stamp.astimezone()  # Ensure the UI can display it in local time.
                     created = stamp.astimezone(timezone.utc).isoformat()
                     if (value['version'] != 1 or not isinstance(target, str) or not Path(target).is_absolute()
-                            or Path(target).suffix.lower() != payload.suffix.lower()
+                            or backup_suffix(Path(target)) != payload.suffix.lower()
                             or type(value['size']) is not int or value['size'] != stat.st_size
                             or not isinstance(value['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', value['sha256'])):
                         raise ValueError('Invalid backup metadata')
@@ -107,8 +113,8 @@ def create_backup(path, payload, *, reason='automatic'):
     from lcsc3d.services.backend import atomic_write
     from lcsc3d.services.output_transaction import suspend_output_tracking
     path = Path(path).resolve()
-    if path.suffix.lower() not in SUFFIXES or len(payload) > MAX_BYTES:
-        raise DownloadError(ui_text('仅支持备份不超过 512 MiB 的 SchLib、PcbLib 和 PrjPcb 文件。'))
+    if backup_suffix(path) not in SUFFIXES or len(payload) > MAX_BYTES:
+        raise DownloadError(ui_text('仅支持备份不超过 512 MiB 的 AD / KiCad 元件库、工程和工程库表文件。'))
     root = backup_directory()
     if linked(root):
         raise DownloadError(ui_text('备份目录不能是链接，请检查应用数据目录。'))
@@ -117,7 +123,7 @@ def create_backup(path, payload, *, reason='automatic'):
         key = uuid.uuid4().hex
         stage, destination = root / ('.pending-' + key), root / key
         stage.mkdir()
-        data = stage / ('original' + path.suffix)
+        data = stage / ('original' + backup_suffix(path))
         metadata = stage / 'metadata.json'
         try:
             with suspend_output_tracking():
@@ -151,6 +157,14 @@ def verified_payload(row):
     elif row.path.suffix.lower() == '.prjpcb':
         from lcsc3d.eda.altium_project import read_project
         read_project(row.path)
+    elif row.path.suffix.lower() in ('.kicad_sym', '.kicad_mod', '.sym-lib-table', '.fp-lib-table'):
+        from lcsc3d.eda.kicad_sexpr import Document
+        kind = {'.kicad_sym': 'kicad_symbol_lib', '.sym-lib-table': 'sym_lib_table',
+                '.fp-lib-table': 'fp_lib_table'}.get(row.path.suffix.lower())
+        Document(payload, kind)
+    elif row.path.suffix.lower() == '.kicad_pro':
+        from lcsc3d.eda.kicad_project import read_project
+        read_project(row.path)
     else:
         from lcsc3d.eda.library_merge import LibraryIndex
         index = LibraryIndex(payload, row.path.suffix[1:].upper())
@@ -175,7 +189,7 @@ def prepare_restore(key, target):
     with LOCK:
         row = get_backup(key)
         target = Path(target).expanduser()
-        if not target.is_absolute() or target.suffix.lower() != row.path.suffix.lower():
+        if not target.is_absolute() or backup_suffix(target) != row.path.suffix.lower():
             raise DownloadError(ui_text('请输入绝对路径，且目标文件类型必须与备份一致。'))
         if linked(target):
             raise DownloadError(ui_text('恢复目标不能是文件链接。'))

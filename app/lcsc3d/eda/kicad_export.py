@@ -10,7 +10,10 @@ from lcsc3d.eda.library_files import commit_library
 @traced('export.kicad_batch', lambda results, entries, options, *a, **kw: {'target': 'kicad',
         'count': len(entries), 'merge_symbols': options.kicad_merge_symbols,
         'merge_footprints': options.kicad_merge_footprints, 'electrical_policy': options.kicad_electrical_policy}, level='INFO')
-def export_batch(results, entries, options, check, *, on_progress=None):
+def export_batch(results, entries, options, check, *, on_progress=None, append_targets=None, target_errors=None):
+    if options.append_mode and options.export_target == 'kicad':
+        from lcsc3d.eda.kicad_append import append_batch
+        return append_batch(results, entries, options, check, append_targets or {}, target_errors or {}, on_progress)
     members = [r for r in results if r.part in entries]
     merged = (options.kicad_merge_symbols and 'KICAD_SYMBOL' in options.formats
               or options.kicad_merge_footprints and 'KICAD_FOOTPRINT' in options.formats)

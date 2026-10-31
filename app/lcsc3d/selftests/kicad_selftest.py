@@ -41,6 +41,10 @@ def start(window, folder):
              ('replace', True, True, 'kicad', ['C5879483']),
              ('via-ad', True, True, 'ad', ['C31966']),
              ('via-kicad', True, True, 'kicad', ['C31966']),
+             ('append', False, False, 'kicad', ['C20197', 'C2040']),
+             ('append-repeat', False, False, 'kicad', ['C20197', 'C2040']),
+             ('append-copies', False, False, 'kicad', ['C20197', 'C2040']),
+             ('append-project', False, False, 'kicad', ['C20197', 'C2040']),
              ('preview-sample', True, True, 'kicad', ['C2040'])]
     state = {'index': -1, 'phase': 'next', 'deadline': time.monotonic() + 90, 'done': False}
     report = {'version': main.VERSION, 'frozen': bool(getattr(sys, 'frozen', False)), 'cases': []}
@@ -121,10 +125,20 @@ def start(window, folder):
                 output = root / name
                 if name in ('replace','ad-replace'):
                     shutil.copytree(root/('combined' if name == 'replace' else 'ad-layout'), output)
+                appending = name.startswith('append')
+                if appending:
+                    if name == 'append':
+                        shutil.copytree(root / 'combined', output)
+                    elif name != 'append-project':
+                        shutil.copytree(root / 'append', output)
+                    output.mkdir(parents=True, exist_ok=True)
+                    project = output / '测试工程.kicad_pro'
+                    project.write_text('{"meta":{"version":1},"board":{"kept":true}}', 'utf-8')
                 state.update(name=name, output=output, before=hashes(output), parts=parts)
                 window.lib_append_box.setChecked(False)
+                window.kicad_lib_append_box.setChecked(False)
                 window.lib_merge_box.setChecked(name in ('ad-layout','ad-replace','via-ad'))
-                window.step_box.setChecked(name == 'copies')
+                window.step_box.setChecked(name in ('copies', 'append-copies'))
                 window.bind_3d_box.setChecked(False)
                 window.obj_box.setChecked(False)
                 window.schlib_box.setChecked(ad)
@@ -141,6 +155,16 @@ def start(window, folder):
                 window.kicad_footprint_name_input.setText('Pads' if name == 'copies' else 'LCSC3D')
                 window.keep_kicad_symbol_box.setChecked(name == 'copies')
                 window.keep_kicad_footprint_box.setChecked(name == 'copies')
+                if appending:
+                    from lcsc3d.ui.export_targets import KICAD_APPEND_TEXT_KEYS
+                    window.kicad_export_targets = {**dict.fromkeys(KICAD_APPEND_TEXT_KEYS, ''),
+                        'project_path': str(project), 'keep_individual': name == 'append-copies'}
+                    if name != 'append-project':
+                        window.kicad_export_targets.update(kicad_symbol_target=str(output / 'LCSC3D.kicad_sym'),
+                                                          kicad_footprint_target=str(output / 'LCSC3D.pretty'))
+                    window.kicad_lib_append_box.setChecked(True)
+                    assert not window.path_input.isEnabled() and not window.browse_button.isEnabled()
+                    assert not window.append_options.isHidden() and window.kicad_merge_options.isHidden()
                 window.schlib_name_input.setText('lcsc3d_v2_3_0_hb')
                 window.pcblib_name_input.setText('lcsc3d_v2_3_0_hb')
                 window.symbol_style_box.setCurrentIndex(window.symbol_style_box.findData('ad'))
@@ -148,7 +172,7 @@ def start(window, folder):
                 window.input.setPlainText('\n'.join(parts))
                 assert window.load_queue()
                 expected = ('SCHLIB', 'PCBLIB') if ad else ('KICAD_FOOTPRINT',) if name == 'footprint-only' else ('KICAD_SYMBOL', 'KICAD_FOOTPRINT')
-                if name == 'copies': expected = ('STEP',) + expected
+                if name in ('copies', 'append-copies'): expected = ('STEP',) + expected
                 assert window.export_options().formats == expected
                 window.start_batch()
                 state['phase'] = 'wait'
@@ -221,6 +245,14 @@ def start(window, folder):
                 timer.stop()
                 window.export_card.installEventFilter(observer)
                 check_merge_frames()
+            elif state['phase'] == 'import' and not window.batch_running and not (window.worker and window.worker.isRunning()):
+                assert (state['output'] / 'sym-lib-table').is_file()
+                assert (state['output'] / 'fp-lib-table').is_file()
+                assert '新增 2' in window.export_dialog.status.text(), window.export_dialog.status.text()
+                window.grab().save(str(root / 'kicad-append-settings.png'))
+                window.export_dialog.reject()
+                report['append_import_without_download_verified'] = True
+                state['phase'] = 'next'
             elif state['phase'] == 'wait' and not window.batch_running and not (window.worker and window.worker.isRunning()):
                 rows = [window.results[p] for p in state['parts']]
                 assert all(r.status == '成功' for r in rows), [r.message for r in rows]
@@ -229,6 +261,23 @@ def start(window, folder):
                     assert len(list(state['output'].glob('*.pretty/*.kicad_mod'))) == 1
                 if state['name'] in ('replace','ad-replace'):
                     assert hashes(state['output']) != state['before']
+                if state['name'].startswith('append'):
+                    from lcsc3d.eda.kicad_sexpr import Document
+                    output = state['output']
+                    project_only = state['name'] == 'append-project'
+                    stem = '测试工程' if project_only else 'LCSC3D'
+                    document = Document((output / (stem + '.kicad_sym')).read_bytes())
+                    assert len(document.root.children('symbol')) == (2 if project_only else 4)
+                    assert len(list((output / (stem + '.pretty')).glob('*.kicad_mod'))) == (2 if project_only else 3)
+                    for name, digest in state['before'].items():
+                        if name.endswith('.kicad_mod') or name.endswith('.kicad_pro'):
+                            assert hashes(output)[name] == digest
+                    if state['name'] == 'append-repeat':
+                        assert hashes(output) == state['before']
+                    if project_only:
+                        assert (output / 'sym-lib-table').is_file() and (output / 'fp-lib-table').is_file()
+                    window.grab().save(str(root / (state['name'] + '-controls.png')))
+                    report['append_preserves_members_and_links_verified'] = True
                 if state['name'] == 'merge-footprints':
                     window.grab().save(str(root / 'kicad-controls.png'))
                 if state['name'] == 'copies':
@@ -239,7 +288,13 @@ def start(window, folder):
                     window.grab().save(str(root/(state['name']+'.png')))
                 report['cases'].append({'name': state['name'], 'statuses': [r.status for r in rows],
                                         'files': sorted(set(p for r in rows for p in r.files)), 'success': True})
-                state['phase'] = 'next'
+                if state['name'] == 'append':
+                    assert not (state['output'] / 'sym-lib-table').exists()
+                    window.configure_export_targets()
+                    window.export_dialog.import_button.click()
+                    state['phase'] = 'import'
+                else:
+                    state['phase'] = 'next'
         except Exception as exc:
             finish(type(exc).__name__ + ': ' + str(exc))
     timer.timeout.connect(tick)

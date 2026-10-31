@@ -270,8 +270,10 @@ class RestorePage(QDialog):
         layout.addLayout(buttons)
 
     def choose_target(self):
+        suffix = self.row.path.suffix
+        pattern = suffix[1:] if suffix in ('.sym-lib-table', '.fp-lib-table') else '*' + suffix
         self.file_page = choose_path(self, ui_text('选择恢复目标'), self.target.text(), self.target.setText,
-                                     filter='Altium (*' + self.row.path.suffix + ')')
+                                     filter='EDA (' + pattern + ')')
 
     def prepare(self):
         if not self.target.text().strip():

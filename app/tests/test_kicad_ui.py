@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,8 @@ from PySide6.QtCore import Qt, QEvent
 from PySide6.QtWidgets import QApplication
 from lcsc3d.ui import main
 from lcsc3d.core.app_logging import close_logging
+from lcsc3d.ui.export_targets import ExportTargetsDialog
+from PySide6.QtTest import QTest
 
 
 class KiCadUiTests(unittest.TestCase):
@@ -204,7 +207,7 @@ class KiCadUiTests(unittest.TestCase):
         w.set_running(False)
         self.assertTrue(all(c.isEnabled() for c in controls))
 
-    def test_kicad_merge_configuration_follows_ad_workflow_without_append(self):
+    def test_kicad_merge_configuration_follows_ad_workflow(self):
         w = self.window
         w.export_target_box.setCurrentIndex(w.export_target_box.findData('kicad'))
         self.assertTrue(w.kicad_merge_options.isHidden())
@@ -228,4 +231,131 @@ class KiCadUiTests(unittest.TestCase):
         w.kicad_lib_merge_box.setChecked(False)
         self.assertTrue(w.kicad_merge_options.isHidden())
         self.assertFalse(w.export_options().kicad_merge_footprints)
+
+    def kicad_targets(self):
+        symbol = self.root / '已有符号.kicad_sym'
+        symbol.write_text('(kicad_symbol_lib (version 20211014) (generator test))', 'utf-8')
+        footprint = self.root / '已有封装.pretty'
+        footprint.mkdir(exist_ok=True)
+        project = self.root / '工程.kicad_pro'
+        project.write_text('{"meta":{"version":1}}', 'utf-8')
+        return symbol, footprint, project
+
+    def test_kicad_append_click_dialog_cancel_and_mutual_exclusion_follow_ad(self):
+        w = self.window
+        w.export_target_box.setCurrentIndex(w.export_target_box.findData('kicad'))
+        w.kicad_symbol_box.setChecked(True)
+        w.kicad_lib_merge_box.setChecked(True)
+        w.kicad_lib_append_box.click()
+        self.assertEqual(w.library_mode(), 'append')
+        self.assertFalse(w.kicad_lib_merge_box.isChecked())
+        self.assertFalse(w.path_input.isEnabled())
+        self.assertFalse(w.append_options.isHidden())
+        self.assertEqual(w.export_dialog.target, 'kicad')
+        w.export_dialog.reject()
+        self.assertEqual(w.library_mode(), 'individual')
+        self.assertTrue(w.path_input.isEnabled())
+        w.kicad_lib_append_box.setChecked(True)
+        w.kicad_lib_merge_box.setChecked(True)
+        self.assertFalse(w.kicad_lib_append_box.isChecked())
+        self.assertEqual(w.library_mode(), 'merge')
+
+    def test_kicad_append_single_target_locks_only_its_format_and_restores_normal_selection(self):
+        w = self.window
+        symbol, footprint, project = self.kicad_targets()
+        w.export_target_box.setCurrentIndex(w.export_target_box.findData('kicad'))
+        w.kicad_symbol_box.setChecked(False)
+        w.kicad_footprint_box.setChecked(True)
+        w.kicad_export_targets.update(kicad_symbol_target=str(symbol))
+        w.kicad_lib_append_box.setChecked(True)
+        self.assertTrue(w.kicad_symbol_box.isChecked())
+        self.assertFalse(w.kicad_footprint_box.isChecked())
+        self.assertFalse(w.kicad_symbol_box.isEnabled())
+        self.assertFalse(w.kicad_footprint_box.isEnabled())
+        options = w.export_options()
+        self.assertEqual(set(options.merged_paths()), {'KICAD_SYMBOL'})
+        self.assertTrue(options.append_mode)
+        w.set_running(True)
+        for widget in (w.kicad_lib_append_box, w.append_configure_button, w.path_input, w.browse_button):
+            self.assertFalse(widget.isEnabled())
+        w.set_running(False)
+        self.assertFalse(w.path_input.isEnabled())
+        w.kicad_lib_append_box.setChecked(False)
+        self.assertFalse(w.kicad_symbol_box.isChecked())
+        self.assertTrue(w.kicad_footprint_box.isChecked())
+        self.assertTrue(w.path_input.isEnabled())
+
+    def test_kicad_append_configuration_and_ad_targets_persist_independently(self):
+        w = self.window
+        symbol, footprint, project = self.kicad_targets()
+        w.export_targets.update(schlib_target=str(self.root / 'ad.SchLib'))
+        w.lib_append_box.setChecked(True)
+        w.export_target_box.setCurrentIndex(w.export_target_box.findData('kicad'))
+        w.kicad_lib_append_box.setChecked(True)
+        w.configure_export_targets()
+        dialog = w.export_dialog
+        dialog.inputs['kicad_symbol_target'].setText(str(symbol))
+        dialog.inputs['kicad_footprint_target'].setText(str(footprint))
+        dialog.inputs['project_path'].setText(str(project))
+        dialog.inputs['individual_directory'].setText(str(self.root / '独立'))
+        dialog.keep_box.setChecked(True)
+        dialog.save()
+        self.assertTrue(w.save_settings())
+        restored = self.create_window()
+        self.assertEqual(restored.library_mode('ad'), 'append')
+        self.assertEqual(restored.library_mode('kicad'), 'append')
+        self.assertEqual(restored.export_options().kicad_symbol_target, str(symbol))
+        self.assertEqual(restored.export_options().project_path, str(project))
+        self.assertEqual(restored.export_options().individual_directory, str(self.root / '独立'))
+        self.assertFalse(restored.path_input.isEnabled())
+        restored.export_target_box.setCurrentIndex(restored.export_target_box.findData('ad'))
+        self.assertEqual(restored.export_options().schlib_target, str(self.root / 'ad.SchLib'))
+        self.assertFalse(restored.export_options().kicad_symbol_target)
+
+    def test_kicad_append_dialog_project_outputs_validation_and_pretty_directory_picker(self):
+        symbol, footprint, project = self.kicad_targets()
+        dialog = ExportTargetsDialog({}, self.window, target='kicad')
+        self.addCleanup(dialog.deleteLater)
+        self.assertFalse(dialog.import_button.isEnabled())
+        self.assertTrue(dialog.project_outputs.isHidden())
+        dialog.inputs['project_path'].setText(str(project))
+        self.assertFalse(dialog.project_outputs.isHidden())
+        self.assertEqual(dialog.inputs['project_kicad_symbol_name'].placeholderText(), '工程')
+        dialog.inputs['project_kicad_symbol_name'].setText('../bad')
+        dialog.save()
+        self.assertIn('无法使用', dialog.status.text())
+        dialog.inputs['project_kicad_symbol_name'].setText('中文符号.kicad_sym')
+        dialog.inputs['kicad_footprint_target'].setText(str(footprint))
+        self.assertTrue(dialog.import_button.isEnabled())
+        self.assertTrue(dialog.project_outputs.isHidden())
+        with patch('lcsc3d.ui.export_targets.choose_path') as choose:
+            dialog.choose(dialog.inputs['kicad_footprint_target'], 'pretty')
+        self.assertTrue(choose.call_args.kwargs['directory'])
+        dialog.save()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+        self.assertFalse((project.parent / 'fp-lib-table').exists())
+
+    def test_kicad_import_button_uses_unsaved_configuration_without_download_queue(self):
+        w = self.window
+        symbol, footprint, project = self.kicad_targets()
+        w.export_target_box.setCurrentIndex(w.export_target_box.findData('kicad'))
+        w.kicad_lib_append_box.setChecked(True)
+        w.configure_export_targets()
+        dialog = w.export_dialog
+        dialog.inputs['kicad_symbol_target'].setText(str(symbol))
+        dialog.inputs['kicad_footprint_target'].setText(str(footprint))
+        dialog.inputs['project_path'].setText(str(project))
+        dialog.import_button.click()
+        deadline = time.monotonic() + 8
+        while w.worker and w.worker.isRunning() and time.monotonic() < deadline:
+            QTest.qWait(15)
+        self.app.processEvents()
+        self.assertFalse(w.batch_running)
+        self.assertTrue(dialog.import_button.isEnabled())
+        self.assertIn('新增 2', dialog.status.text())
+        self.assertTrue((project.parent / 'sym-lib-table').exists())
+        self.assertTrue((project.parent / 'fp-lib-table').exists())
+        self.assertEqual(w.ids, [])
+        self.assertFalse(w.kicad_export_targets['kicad_symbol_target'])
+        dialog.reject()
         self.assertEqual(w.library_mode(), 'individual')

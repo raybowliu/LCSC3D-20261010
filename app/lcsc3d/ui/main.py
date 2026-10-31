@@ -39,7 +39,7 @@ from lcsc3d.core.app_logging import (configure_logging, log_event, set_log_level
                          new_context, current_context, log_context, contextual, submit_logged,
                          safe_part, install_exception_hooks, log_runtime)
 from lcsc3d.ui.settings_ui import SettingsDialog
-from lcsc3d.ui.export_targets import ExportTargetsDialog, APPEND_TEXT_KEYS
+from lcsc3d.ui.export_targets import ExportTargetsDialog, APPEND_TEXT_KEYS, KICAD_APPEND_TEXT_KEYS
 from lcsc3d.ui.product_preview import ProductPreview
 from lcsc3d.ui.ui_components import IconButton, title_block, surface, HelpDialog, ColumnSplitter
 from lcsc3d.ui.shell_ui import PageHost, NotificationCenter, AccountPanel, choose_path, notify
@@ -298,7 +298,9 @@ class MainWindow(FramelessMainWindow):
         self.settings_dialog = None
         self.messages_page = None
         self.export_targets = {**dict.fromkeys(APPEND_TEXT_KEYS, ''), 'keep_individual': False}
+        self.kicad_export_targets = {**dict.fromkeys(KICAD_APPEND_TEXT_KEYS, ''), 'keep_individual': False}
         self._normal_library_formats = None
+        self._normal_kicad_library_formats = None
         self.worker = None
         self.batch_running = False
         self.progress_cancelled = False
@@ -556,6 +558,10 @@ class MainWindow(FramelessMainWindow):
         self.kicad_lib_merge_box = QCheckBox(ui_text('合并'))
         self.kicad_lib_merge_box.toggled.connect(self.change_kicad_merge_mode)
         kicad_row.addWidget(self.kicad_lib_merge_box)
+        self.kicad_lib_append_box = QCheckBox(ui_text('追加'))
+        self.kicad_lib_append_box.toggled.connect(lambda checked: self.change_kicad_library_mode('append', checked))
+        self.kicad_lib_append_box.clicked.connect(self.append_clicked)
+        kicad_row.addWidget(self.kicad_lib_append_box)
         kicad_row.addSpacing(12)
         kicad_row.addWidget(label(ui_text('引脚电气类型'), 'muted'))
         self.kicad_electrical_box = QComboBox()
@@ -932,7 +938,7 @@ class MainWindow(FramelessMainWindow):
         self.keep_kicad_footprint_box.setChecked(settings.get('keep_kicad_footprints') is True)
         self.kicad_lib_merge_box.blockSignals(True)
         mode = settings.get('kicad_library_mode')
-        self.kicad_lib_merge_box.setChecked(mode == 'merge' if mode in ('individual', 'merge') else
+        self.kicad_lib_merge_box.setChecked(mode == 'merge' if mode in ('individual', 'merge', 'append') else
             self.kicad_merge_symbol_box.isChecked() or self.kicad_merge_footprint_box.isChecked())
         self.kicad_lib_merge_box.blockSignals(False)
         self.merge_schlib_box.setChecked(settings.get('merge_schlib') is True)
@@ -948,6 +954,12 @@ class MainWindow(FramelessMainWindow):
         legacy_append = any(self.export_targets[key] for key in ('schlib_target', 'pcblib_target', 'project_path'))
         self.export_targets['keep_individual'] = settings.get('keep_individual',
             settings.get('keep_schlib') is True or settings.get('keep_pcblib') is True) is True
+        kicad_targets = settings.get('kicad_append_targets')
+        kicad_targets = kicad_targets if isinstance(kicad_targets, dict) else {}
+        self.kicad_export_targets = {key: kicad_targets[key] if isinstance(kicad_targets.get(key), str) else ''
+                                     for key in KICAD_APPEND_TEXT_KEYS}
+        self.kicad_export_targets['keep_individual'] = kicad_targets.get('keep_individual') is True
+        self.kicad_lib_append_box.setChecked(settings.get('kicad_library_mode') == 'append')
         for key, widget in (('schlib_name', self.schlib_name_input), ('pcblib_name', self.pcblib_name_input)):
             value = settings.get(key)
             widget.setText(value if isinstance(value, str) else 'LCSC3D')
@@ -997,6 +1009,7 @@ class MainWindow(FramelessMainWindow):
                 'keep_kicad_symbols': self.keep_kicad_symbol_box.isChecked(),
                 'keep_kicad_footprints': self.keep_kicad_footprint_box.isChecked(),
                 'kicad_library_mode': self.library_mode('kicad'),
+                'kicad_append_targets': self.kicad_export_targets,
                 'merge_schlib': self.merge_schlib_box.isChecked(), 'merge_pcblib': self.merge_pcblib_box.isChecked(),
                 'schlib_name': self.schlib_name_input.text(), 'pcblib_name': self.pcblib_name_input.text(),
                 'keep_schlib': self.keep_schlib_box.isChecked(), 'keep_pcblib': self.keep_pcblib_box.isChecked(),
@@ -1494,11 +1507,26 @@ class MainWindow(FramelessMainWindow):
 
     def library_mode(self, target=None):
         if (target or self.export_target_box.currentData()) == 'kicad':
-            return 'merge' if self.kicad_lib_merge_box.isChecked() else 'individual'
+            return 'append' if self.kicad_lib_append_box.isChecked() else 'merge' if self.kicad_lib_merge_box.isChecked() else 'individual'
         return 'append' if self.lib_append_box.isChecked() else 'merge' if self.lib_merge_box.isChecked() else 'individual'
 
     def change_kicad_merge_mode(self, checked):
-        if checked and not any(box.isChecked() for box in (self.kicad_merge_symbol_box, self.kicad_merge_footprint_box)):
+        self.change_kicad_library_mode('merge', checked)
+
+    def change_kicad_library_mode(self, mode, checked):
+        other = self.kicad_lib_append_box if mode == 'merge' else self.kicad_lib_merge_box
+        if checked:
+            other.setChecked(False)
+        if mode == 'append':
+            if checked and self._normal_kicad_library_formats is None:
+                self._normal_kicad_library_formats = (self.kicad_symbol_box.isChecked(), self.kicad_footprint_box.isChecked())
+            elif not checked and self._normal_kicad_library_formats is not None:
+                values, self._normal_kicad_library_formats = self._normal_kicad_library_formats, None
+                for box, value in zip((self.kicad_symbol_box, self.kicad_footprint_box), values):
+                    box.blockSignals(True)
+                    box.setChecked(value)
+                    box.blockSignals(False)
+        if mode == 'merge' and checked and not any(box.isChecked() for box in (self.kicad_merge_symbol_box, self.kicad_merge_footprint_box)):
             self.kicad_merge_symbol_box.setChecked(True)
             self.kicad_merge_footprint_box.setChecked(True)
         self.update_merge_controls()
@@ -1529,7 +1557,9 @@ class MainWindow(FramelessMainWindow):
 
     def update_merge_controls(self):
         ad = self.export_target_box.currentData() == 'ad'
-        append = ad and self.lib_append_box.isChecked() and self.selected_formats() != ('PDF',)
+        append = self.library_mode() == 'append' and self.selected_formats() != ('PDF',)
+        values = self.export_targets if ad else self.kicad_export_targets
+        target_keys = ('schlib_target', 'pcblib_target') if ad else ('kicad_symbol_target', 'kicad_footprint_target')
         merging = ad and self.lib_merge_box.isChecked()
         self.export_target_box.setEnabled(not self.batch_running)
         self.ad_format_options.setVisible(ad)
@@ -1543,6 +1573,7 @@ class MainWindow(FramelessMainWindow):
             widget.setEnabled(not self.batch_running and not ad)
         kicad_enabled = not self.batch_running and not ad
         self.kicad_lib_merge_box.setEnabled(kicad_enabled)
+        self.kicad_lib_append_box.setEnabled(kicad_enabled)
         self.kicad_merge_options.setVisible(not ad and self.kicad_lib_merge_box.isChecked())
         for box, name, format_box, keep in (
             (self.kicad_merge_symbol_box, self.kicad_symbol_name_input, self.kicad_symbol_box, self.keep_kicad_symbol_box),
@@ -1554,18 +1585,25 @@ class MainWindow(FramelessMainWindow):
         self.kicad_electrical_box.setEnabled(kicad_enabled and self.kicad_symbol_box.isChecked())
         self.merge_options.setVisible(merging)
         self.append_options.setVisible(append)
-        for widget in (self.lib_merge_box, self.lib_append_box, self.append_configure_button):
+        for widget in (self.lib_merge_box, self.lib_append_box):
             widget.setEnabled(not self.batch_running and ad)
+        self.append_configure_button.setEnabled(not self.batch_running)
         for widget in (self.path_input, self.browse_button):
             widget.setEnabled(not self.batch_running and not append)
         self.path_input.setToolTip(ui_text('追加模式的导出目录在“配置追加…”中设置') if append else '')
-        targeted = append and any(self.export_targets.get(key) for key in ('schlib_target', 'pcblib_target'))
+        targeted = append and any(values.get(key) for key in target_keys)
         for key, format_box in (('schlib_target', self.schlib_box), ('pcblib_target', self.pcblib_box)):
-            if targeted:
+            if targeted and ad:
                 format_box.blockSignals(True)
-                format_box.setChecked(bool(self.export_targets.get(key)))
+                format_box.setChecked(bool(values.get(key)))
                 format_box.blockSignals(False)
             format_box.setEnabled(not self.batch_running and ad and not targeted)
+        for key, format_box in (('kicad_symbol_target', self.kicad_symbol_box), ('kicad_footprint_target', self.kicad_footprint_box)):
+            if targeted and not ad:
+                format_box.blockSignals(True)
+                format_box.setChecked(bool(values.get(key)))
+                format_box.blockSignals(False)
+            format_box.setEnabled(kicad_enabled and not targeted)
         for box, name, format_box, keep in (
                 (self.merge_schlib_box, self.schlib_name_input, self.schlib_box, self.keep_schlib_box),
                 (self.merge_pcblib_box, self.pcblib_name_input, self.pcblib_box, self.keep_pcblib_box)):
@@ -1574,14 +1612,14 @@ class MainWindow(FramelessMainWindow):
             keep.setEnabled(enabled and box.isChecked())
             name.setEnabled(enabled and box.isChecked())
         self.model_options.setVisible(self.pcblib_box.isChecked() if ad else self.kicad_footprint_box.isChecked())
-        targets = [self.export_targets[key] for key in ('schlib_target', 'pcblib_target') if self.export_targets.get(key)]
+        targets = [values[key] for key in target_keys if values.get(key)]
         summary = [ui_message('追加到 {0} 份已有库', len(targets))] if targets else []
-        if self.export_targets.get('project_path') and not targets:
+        if values.get('project_path') and not targets:
             summary.append(ui_text('下载后加入 PCB 工程'))
-        if self.export_targets.get('keep_individual'):
+        if values.get('keep_individual'):
             summary.append(ui_text('独立导出器件'))
         self.targets_summary.setText(' · '.join(summary) or ui_text('请配置已有库或 PCB 工程'))
-        self.targets_summary.setToolTip('\n'.join(targets + [self.export_targets.get('project_path', '')]))
+        self.targets_summary.setToolTip('\n'.join(targets + [values.get('project_path', '')]))
         self.update_start_button()
         if hasattr(self, 'export_card'):
             # Invalidate the nested KiCad row hint only when controls change;
@@ -1628,25 +1666,34 @@ class MainWindow(FramelessMainWindow):
         return super().eventFilter(watched, event)
 
     def configure_export_targets(self):
+        target = self.export_target_box.currentData()
+        values = self.export_targets if target == 'ad' else self.kicad_export_targets
+        target_keys = ('schlib_target', 'pcblib_target') if target == 'ad' else ('kicad_symbol_target', 'kicad_footprint_target')
+        format_boxes = (self.schlib_box, self.pcblib_box) if target == 'ad' else (self.kicad_symbol_box, self.kicad_footprint_box)
+        append_box = self.lib_append_box if target == 'ad' else self.kicad_lib_append_box
         current = getattr(self, 'export_dialog', None)
         if current is not None and not current._page_finished:
-            current.show()
-            return
+            if current.target == target:
+                current.show()
+                return
+            current.reject()
         if current is not None:
             current.deleteLater()
-        dialog = self.export_dialog = ExportTargetsDialog(self.export_targets, self)
+        dialog = self.export_dialog = ExportTargetsDialog(values, self, target=target)
         dialog.import_requested.connect(lambda values: self.start_existing_library_import(values, dialog))
         def completed(result):
             if result == dialog.DialogCode.Accepted:
-                self.export_targets = dialog.values
-                if not any(self.export_targets[key] for key in ('schlib_target', 'pcblib_target')) and not any(
-                        box.isChecked() for box in (self.schlib_box, self.pcblib_box)):
-                    self.schlib_box.setChecked(True)
-                    self.pcblib_box.setChecked(True)
+                if target == 'ad':
+                    self.export_targets = dialog.values
+                else:
+                    self.kicad_export_targets = dialog.values
+                if not any(dialog.values[key] for key in target_keys) and not any(box.isChecked() for box in format_boxes):
+                    for box in format_boxes:
+                        box.setChecked(True)
                 self.update_merge_controls()
                 self.save_settings()
-            elif not any(self.export_targets.get(key) for key in ('schlib_target', 'pcblib_target', 'project_path')):
-                self.lib_append_box.setChecked(False)
+            elif not any(values.get(key) for key in target_keys + ('project_path',)):
+                append_box.setChecked(False)
         dialog.finished.connect(completed)
         dialog.show()
 
@@ -1664,13 +1711,14 @@ class MainWindow(FramelessMainWindow):
             return Options(Path(self.path_input.text().strip()).expanduser().resolve(), formats, bind_3d_models=False)
         ad = self.export_target_box.currentData() == 'ad'
         merge = ad and self.lib_merge_box.isChecked()
-        append = ad and self.lib_append_box.isChecked()
+        append = self.library_mode() == 'append'
         kicad_merge = not ad and self.kicad_lib_merge_box.isChecked()
         return Options(Path(self.path_input.text().strip()).expanduser().resolve(), formats,
                        merge and self.merge_schlib_box.isChecked(), merge and self.merge_pcblib_box.isChecked(),
                        self.schlib_name_input.text(), self.pcblib_name_input.text(),
                        merge and self.keep_schlib_box.isChecked(), merge and self.keep_pcblib_box.isChecked(),
                        append_mode=append,
+                       export_target='ad' if ad else 'kicad',
                        symbol_style=self.symbol_style_box.currentData(),
                        kicad_merge_symbols=kicad_merge and self.kicad_symbol_box.isChecked() and self.kicad_merge_symbol_box.isChecked(),
                        kicad_merge_footprints=kicad_merge and self.kicad_footprint_box.isChecked() and self.kicad_merge_footprint_box.isChecked(),
@@ -1682,7 +1730,7 @@ class MainWindow(FramelessMainWindow):
                        kicad_footprint_name=self.kicad_footprint_name_input.text().strip() if kicad_merge and self.kicad_merge_footprint_box.isChecked() else '',
                        keep_kicad_symbols=kicad_merge and self.keep_kicad_symbol_box.isChecked(),
                        keep_kicad_footprints=kicad_merge and self.keep_kicad_footprint_box.isChecked(),
-                       **(self.export_targets if append else {}))
+                       **((self.export_targets if ad else self.kicad_export_targets) if append else {}))
 
     def start_batch(self):
         try:
@@ -1707,7 +1755,7 @@ class MainWindow(FramelessMainWindow):
             self.run_status.setText(ui_text('请至少选择一种模型、PDF、AD 或 KiCad 元件库格式'))
             notify(self, ui_text('无法开始下载'), self.run_status.source_text(), severity='warning')
             return
-        if (formats == ('PDF',) or not (self.export_target_box.currentData() == 'ad' and self.lib_append_box.isChecked())) and not self.path_input.text().strip():
+        if (formats == ('PDF',) or self.library_mode() != 'append') and not self.path_input.text().strip():
             self.run_status.setText(ui_text('请选择保存目录'))
             notify(self, ui_text('无法开始下载'), self.run_status.source_text(), severity='warning')
             return
@@ -1724,15 +1772,7 @@ class MainWindow(FramelessMainWindow):
             options = self.export_options()
             destination = options.output_root()
             options.merged_paths()
-            from lcsc3d.eda.library_merge import read_library
-            from lcsc3d.eda.altium_project import read_project
-            for fmt, path in options.merged_paths().items():
-                if options.appends_to(fmt, path):
-                    read_library(path, fmt)
-            if options.project_path:
-                if not any(fmt in options.formats for fmt in ('SCHLIB', 'PCBLIB')):
-                    raise DownloadError(ui_text('请至少选择一种 AD 库格式以加入工程'))
-                read_project(options.project_path)
+            options.validate_targets()
         except (DownloadError, OSError, UnicodeError) as exc:
             record_error(exc, 'export.validation_failed', mode=self.library_mode(), stage='validate')
             self.run_status.setText(str(exc))
@@ -1778,9 +1818,9 @@ class MainWindow(FramelessMainWindow):
             dialog.status.setText(ui_text('请等待备份操作完成后再开始导出。'))
             return
         try:
-            options = Options(data_directory() / 'downloads', (), append_mode=True, **values)
+            options = Options(data_directory() / 'downloads', (), append_mode=True, export_target=dialog.target, **values)
             has_targets = bool(options.existing_targets() and options.project_path)
-        except (ValueError, OSError) as exc:
+        except (DownloadError, ValueError, OSError) as exc:
             record_error(exc, 'export.existing_import_rejected', stage='validate')
             dialog.status.setText(ui_text('无法使用所选文件：') + str(exc))
             return
@@ -2276,8 +2316,8 @@ class MainWindow(FramelessMainWindow):
             '默认记住登录，重启后自动恢复；取消勾选时只保留本次登录。「退出登录」可清除已保存会话。<br><br>'
             '左侧「设置」可分别选择商城与检查更新是否使用系统代理，并调整日志等级；默认 Debug。「打开日志」可打开日志目录。<br><br>'
             '可保存官方 STEP、OBJ，并导出原生 AD SchLib 符号库、PcbLib 封装库；不导出 JSON 或 SVG。<br>'
-            '「导出到」选择 AD 或 KiCad，仅显示对应配置。KiCad 与 AD 使用相同的合并开关、分别命名和独立器件选项，KiCad 不提供追加；引脚类型默认跟随源数据，不支持的类型使用未指定，也可统一覆盖。矩形统一直角，实心填充使用主体背景颜色。<br>'
-            'KiCad：添加 .kicad_sym 和 .pretty 时，封装库昵称须与导出库名一致。同名库按本次选择整体覆盖；暂不支持追加或自动注册工程库。3D 默认内嵌，适用于 KiCad 9/10；KiCad 8 请选外置模型模式，并整体保留 .pretty 文件夹。<br>'
+            '「导出到」选择 AD 或 KiCad，仅显示对应配置。KiCad 与 AD 使用相同的合并、追加、分别命名和独立器件选项；引脚类型默认跟随源数据，不支持的类型使用未指定，也可统一覆盖。矩形统一直角，实心填充使用主体背景颜色。<br>'
+            'KiCad：添加 .kicad_sym 和 .pretty 时，封装库昵称须与导出库名一致。普通导出与合并覆盖同名库；追加保留旧条目，并可将库注册到 .kicad_pro 工程的库表。3D 默认内嵌，适用于 KiCad 9/10；KiCad 8 请选外置模型模式，并整体保留 .pretty 文件夹。<br>'
             'SchLib / PcbLib 可分别勾选合并并自定义库名，合并文件保存在所选目录根部；默认逐器件导出。<br>'
             'Lib「合并」「追加」互斥，勾选后显示配置。未勾选「独立导出器件」时，3D 文件集中到 SchLib 旁的“库名_3D”文件夹；仅有 PcbLib 时跟随其名称。<br>'
             '「追加」仅指定 PCB 工程时，可分别设置 3D、SchLib、PcbLib 的目录和库名；独立器件目录留空时使用工程所在文件夹。<br>在追加配置页指定已有库和工程后，点击「将指定库导入到PCB工程」直接导入，无须下载器件。<br>'

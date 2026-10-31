@@ -33,7 +33,7 @@ LCSC3D is a portable Windows tool for hardware development, PCB design and mecha
 4. Choose **Altium Designer / KiCad** under **Export to** and select model and library formats. Enable **Lib → Merge** to combine libraries and set their names independently.
 5. Click **Download**, then **Part folder**. Open SchLib / PcbLib in AD, or add the symbol file and footprint directory through KiCad's library managers.
 
-**Merging again uses the current selection.** Normal and merged AD / KiCad exports replace same-name libraries after successful generation. KiCad replaces the entire same-name `.pretty` directory, removing old members. Include every part you want to retain. AD's **Append** mode adds parts to existing libraries; KiCad append is not currently available.
+**Merging again uses the current selection.** Normal and merged AD / KiCad exports replace same-name libraries after successful generation. KiCad replaces the entire same-name `.pretty` directory, removing old members. Include every part you want to retain. Both targets offer **Lib → Append** to preserve existing libraries and add parts, generate project libraries, or import specified libraries directly from the configuration page.
 
 ## Mainland storefront: selection, information and purchasing
 
@@ -103,7 +103,7 @@ A missing or failed 3D model does not discard an available 2D footprint. **A sto
 | Pin electrical types | All exported pins are Passive | Source types by default or a uniform override; unsupported types become Unspecified |
 | Symbol style | JLC / AD, selected in the preview and applied to export | KiCad style; square rectangles with solid body-background fill |
 | Footprint geometry | Pads, holes, slots, copper regions, graphics and native vias | Pads, holes, slots, copper regions and graphics; vias retained as unnumbered plated through-holes |
-| Append and projects | Append to libraries, customize project folders/names and import into `.PrjPcb` | Append and automatic project registration are not yet supported |
+| Append and projects | Append to libraries, customize project folders/names and import into `.PrjPcb` | Same configuration flow; append to `.kicad_sym` / `.pretty` and register in `.kicad_pro` project library tables |
 
 In KiCad, **use the exported footprint library name as its nickname**, such as `LCSC3D`, so symbol footprint references resolve. Footprint vias retain their positions, drills and copper rings; confirm their net assignment in the PCB. Conversion approximations appear in export results.
 
@@ -196,7 +196,7 @@ Parts without 3D models may still have exportable symbols and footprints. One fo
 
 **Settings** provides Simplified Chinese / English, system / light / dark themes, colors, button text colors and 10–24px text sizes. The interface follows the system font by default, with an option to choose an installed font. English uses LCSC International with English descriptions and USD prices. International sign-in and favorites are managed on LCSC.com; mainland and international account sessions are separate.
 
-Storefront and update requests can independently use the system proxy or direct connections. **Diagnostics** lets you choose log levels, open, package or clear logs. Logs cover downloads, AD / KiCad conversion, file replacement and recovery. Diagnostic packages exclude credentials, and logging and crash capture continue after clearing. AD append and project changes support automatic backups, available under **Settings → Backups**.
+Storefront and update requests can independently use the system proxy or direct connections. **Diagnostics** lets you choose log levels, open, package or clear logs. Logs cover downloads, AD / KiCad conversion, file replacement and recovery. Diagnostic packages exclude credentials, and logging and crash capture continue after clearing. AD / KiCad append and project library table changes support automatic backups, available under **Settings → Backups**.
 
 Settings, sessions, logs, caches and update data live under `%LOCALAPPDATA%/LCSC3D/`. Model and library output folders are chosen separately.
 

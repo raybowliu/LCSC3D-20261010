@@ -35,7 +35,8 @@ assert process.returncode == 0, process.returncode
 report = json.loads((root / 'kicad-verification.json').read_text('utf-8'))
 version = re.search(r"VERSION = '([^']+)'", (ROOT / 'app/lcsc3d/ui/main.py').read_text('utf-8')).group(1)
 assert report['success'] and report['frozen'] and report['version'] == version, report
-assert [c['name'] for c in report['cases']] == ['individual', 'combined', 'merge-symbols', 'merge-footprints', 'footprint-only', 'copies', 'reversed', 'ad', 'ad-layout', 'ad-replace', 'replace', 'via-ad', 'via-kicad', 'preview-sample']
+assert [c['name'] for c in report['cases']] == ['individual', 'combined', 'merge-symbols', 'merge-footprints', 'footprint-only', 'copies', 'reversed', 'ad', 'ad-layout', 'ad-replace', 'replace', 'via-ad', 'via-kicad', 'append', 'append-repeat', 'append-copies', 'append-project', 'preview-sample']
+assert report['append_import_without_download_verified'] and report['append_preserves_members_and_links_verified']
 assert report['kicad_preview_verified']
 assert report['preview_painted_pixels_verified']
 assert report['reversed_pin_preview_verified'] and report['wrapped_results_and_card_spacing_verified']
@@ -100,6 +101,18 @@ if args.cli:
                          for p in ('C23922', 'C8734'))
     assert len(list((root / 'native-sym').glob('*.svg'))) == expected_units
     assert len(list((root / 'native-fp').glob('*.svg'))) == 1
+    for case in ('append', 'append-repeat', 'append-copies', 'append-project'):
+        stem = '测试工程' if case == 'append-project' else 'LCSC3D'
+        for kind, target in (('sym', root / case / (stem + '.kicad_sym')),
+                             ('fp', root / case / (stem + '.pretty'))):
+            output = root / ('native-' + case + '-' + kind)
+            output.mkdir(parents=True, exist_ok=True)
+            command = [str(args.cli.resolve()), kind, 'export', 'svg', '--output', str(output), str(target)]
+            result = subprocess.run(command, env=env, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60)
+            (root / (output.name + '.log')).write_text(result.stdout + result.stderr, 'utf-8')
+            assert result.returncode == 0 and 'Error:' not in result.stderr, result.stderr
+            assert list(output.glob('*.svg')), output
+    report['appended_files_read_by_kicad'] = True
     report['frozen_files_read_by_kicad'] = True
 report['ad_geometry_verified'] = True
 report['electrical_types_and_references_verified'] = True

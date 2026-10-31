@@ -1,4 +1,4 @@
-"""Library append destinations and Altium project integration controls."""
+"""Shared append destinations and project integration controls for AD and KiCad."""
 from lcsc3d.core.i18n import text as ui_text, message as ui_message
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal
@@ -18,13 +18,23 @@ TARGET_PATH_KEYS = ('schlib_target', 'pcblib_target', 'project_path')
 PROJECT_OUTPUT_KEYS = ('project_model_directory', 'project_schlib_directory', 'project_schlib_name',
                        'project_pcblib_directory', 'project_pcblib_name')
 APPEND_TEXT_KEYS = TARGET_PATH_KEYS + PROJECT_OUTPUT_KEYS + ('individual_directory',)
+KICAD_TARGET_PATH_KEYS = ('kicad_symbol_target', 'kicad_footprint_target', 'project_path')
+KICAD_PROJECT_OUTPUT_KEYS = ('project_model_directory', 'project_kicad_symbol_directory', 'project_kicad_symbol_name',
+                            'project_kicad_footprint_directory', 'project_kicad_footprint_name')
+KICAD_APPEND_TEXT_KEYS = KICAD_TARGET_PATH_KEYS + KICAD_PROJECT_OUTPUT_KEYS + ('individual_directory',)
 
 
 class ExportTargetsDialog(QDialog):
     import_requested = Signal(object)
 
-    def __init__(self, values, parent):
+    def __init__(self, values, parent, *, target='ad'):
         super().__init__(parent)
+        self.target = target
+        self.library_fields = (('kicad_symbol_target', 'kicad_symbol', 'KICAD_SYMBOL', 'kicad_sym'),
+                               ('kicad_footprint_target', 'kicad_footprint', 'KICAD_FOOTPRINT', 'pretty')) if target == 'kicad' else (
+                               ('schlib_target', 'schlib', 'SCHLIB', 'SchLib'), ('pcblib_target', 'pcblib', 'PCBLIB', 'PcbLib'))
+        self.target_path_keys = KICAD_TARGET_PATH_KEYS if target == 'kicad' else TARGET_PATH_KEYS
+        self.project_output_keys = KICAD_PROJECT_OUTPUT_KEYS if target == 'kicad' else PROJECT_OUTPUT_KEYS
         self.import_running = False
         self.setWindowTitle(ui_text('追加 · 已有库与 PCB 工程'))
         self.setWindowModality(Qt.WindowModal)
@@ -39,7 +49,8 @@ class ExportTargetsDialog(QDialog):
         layout.setSpacing(16)
         self.content_scroll = scroll_page(content)
         outer.addWidget(self.content_scroll, 1)
-        hint = QLabel(ui_text('已有库可只选 SchLib 或 PcbLib，只追加对应格式。\n只指定 PCB 工程时，可分别设置 3D、SchLib 和 PcbLib 的导出目录及库名；同名库存在时继续追加。\n相同封装自动复用，同名不同封装加序号；可在设置的“备份”页管理自动备份和恢复。'))
+        hint = QLabel(ui_text('已有库可只选 .kicad_sym 或 .pretty，只追加对应格式。\n只指定 PCB 工程时，可分别设置 3D、符号库和封装库的导出目录及库名；同名库存在时继续追加。\n相同封装自动复用，同名不同封装加序号；可在设置的“备份”页管理自动备份和恢复。' if target == 'kicad' else
+                            '已有库可只选 SchLib 或 PcbLib，只追加对应格式。\n只指定 PCB 工程时，可分别设置 3D、SchLib 和 PcbLib 的导出目录及库名；同名库存在时继续追加。\n相同封装自动复用，同名不同封装加序号；可在设置的“备份”页管理自动备份和恢复。'))
         hint.setWordWrap(True)
         layout.addWidget(hint)
         files, files_layout = surface()
@@ -48,13 +59,14 @@ class ExportTargetsDialog(QDialog):
         form.setSpacing(14)
         files_layout.addLayout(form)
         self.inputs = {}
-        for key, title, suffix in (('schlib_target', ui_text('已有符号库'), 'SchLib'),
-                                    ('pcblib_target', ui_text('已有封装库'), 'PcbLib'),
-                                    ('project_path', ui_text('PCB 工程'), 'PrjPcb')):
+        fields = ((self.library_fields[0][0], ui_text('已有符号库'), self.library_fields[0][3]),
+                  (self.library_fields[1][0], ui_text('已有封装库'), self.library_fields[1][3]),
+                  ('project_path', ui_text('PCB 工程'), 'kicad_pro' if target == 'kicad' else 'PrjPcb'))
+        for key, title, suffix in fields:
             row = QHBoxLayout()
             edit = self.inputs[key] = QLineEdit(values.get(key, ''))
             edit.setAccessibleName(title)
-            edit.setPlaceholderText(ui_text('选择 .') + suffix + ui_text(' 文件'))
+            edit.setPlaceholderText(ui_text('选择 .') + suffix + ui_text(' 文件夹' if suffix == 'pretty' else ' 文件'))
             row.addWidget(edit)
             browse = QPushButton(ui_text('选择…'))
             browse.clicked.connect(lambda checked=False, e=edit, ext=suffix: self.choose(e, ext))
@@ -79,7 +91,8 @@ class ExportTargetsDialog(QDialog):
         project_form.setSpacing(14)
         project_layout.addLayout(project_form)
         self.add_directory(project_form, 'project_model_directory', ui_text('3D 导出目录'), values)
-        for kind, label in (('schlib', 'SchLib'), ('pcblib', 'PcbLib')):
+        for key, kind, fmt, label in self.library_fields:
+            label = '.' + label if target == 'kicad' else label
             self.add_directory(project_form, f'project_{kind}_directory', ui_message('{0} 导出目录', label), values)
             edit = self.inputs[f'project_{kind}_name'] = QLineEdit(values.get(f'project_{kind}_name', ''))
             edit.setAccessibleName(ui_message('{0} 库名', label))
@@ -136,7 +149,7 @@ class ExportTargetsDialog(QDialog):
         form.addRow(title, row)
 
     def update_controls(self):
-        has_library = any(self.inputs[key].text().strip() for key in ('schlib_target', 'pcblib_target'))
+        has_library = any(self.inputs[key].text().strip() for key, kind, fmt, suffix in self.library_fields)
         project = self.inputs['project_path'].text().strip()
         self.import_button.setEnabled(bool(has_library and project) and not self.import_running)
         project_only = bool(project) and not has_library
@@ -144,11 +157,12 @@ class ExportTargetsDialog(QDialog):
         self.project_outputs.setEnabled(project_only)
         self.individual_row.setEnabled(self.keep_box.isChecked())
         default_directory = str(Path(project).parent) if project else ui_text('PCB 工程所在文件夹')
-        for kind in ('schlib', 'pcblib'):
+        for key, kind, fmt, suffix in self.library_fields:
             self.inputs[f'project_{kind}_directory'].setPlaceholderText(default_directory)
             self.inputs[f'project_{kind}_name'].setPlaceholderText(Path(project).stem if project else ui_text('PCB 工程名称'))
         self.inputs['project_model_directory'].setPlaceholderText(ui_text('留空：按库名或器件目录自动保存'))
-        primary = self.inputs['schlib_target'].text().strip() or self.inputs['pcblib_target'].text().strip()
+        primary = next((self.inputs[key].text().strip() for key, kind, fmt, suffix in self.library_fields
+                        if self.inputs[key].text().strip()), '')
         self.inputs['individual_directory'].setPlaceholderText(
             default_directory if project else str(Path(primary).parent) if primary else ui_text('已有库所在文件夹'))
 
@@ -158,7 +172,7 @@ class ExportTargetsDialog(QDialog):
 
     def request_import(self):
         if self.import_button.isEnabled() and not self.import_running:
-            self.import_requested.emit({key: self.inputs[key].text().strip() for key in TARGET_PATH_KEYS})
+            self.import_requested.emit({key: self.inputs[key].text().strip() for key in self.target_path_keys})
 
     def set_import_running(self, running):
         self.import_running = running
@@ -169,10 +183,11 @@ class ExportTargetsDialog(QDialog):
 
     def choose(self, edit, suffix):
         self.file_page = choose_path(self, ui_text('选择 .') + suffix, edit.text(), edit.setText,
-                                     filter=ui_message('AD 文件 (*.{0})', suffix))
+                                     directory=suffix == 'pretty',
+                                     filter=ui_message('KiCad 文件 (*.{0})' if self.target == 'kicad' else 'AD 文件 (*.{0})', suffix))
 
     def choose_directory(self, edit):
-        target = next((self.inputs[key].text().strip() for key in ('project_path', 'schlib_target', 'pcblib_target')
+        target = next((self.inputs[key].text().strip() for key in ('project_path',) + self.target_path_keys[:2]
                        if self.inputs[key].text().strip()), '')
         initial = edit.text() or (str(Path(target).expanduser().parent) if target else '')
         self.file_page = choose_path(self, ui_text('选择导出目录'), initial,
@@ -184,19 +199,27 @@ class ExportTargetsDialog(QDialog):
             return
         self.values = self.selected_values()
         try:
-            if not any(self.values[key] for key in TARGET_PATH_KEYS):
+            if not any(self.values[key] for key in self.target_path_keys):
                 raise DownloadError(ui_text('请至少选择一份已有库或一个 PCB 工程'))
-            for key, format in (('schlib_target', 'SCHLIB'), ('pcblib_target', 'PCBLIB')):
+            for key, kind, format, suffix in self.library_fields:
                 if self.values[key]:
-                    read_library(self.values[key], format)
+                    if self.target == 'kicad':
+                        from lcsc3d.eda.kicad_append import read_target
+                        read_target(self.values[key], format)
+                    else:
+                        read_library(self.values[key], format)
             if self.values['project_path']:
-                read_project(self.values['project_path'])
+                if self.target == 'kicad':
+                    from lcsc3d.eda.kicad_project import read_project as read_kicad_project
+                    read_kicad_project(self.values['project_path'])
+                else:
+                    read_project(self.values['project_path'])
             active_keys = []
             if self.project_outputs.isEnabled():
-                active_keys.extend(PROJECT_OUTPUT_KEYS)
-                for kind in ('schlib', 'pcblib'):
+                active_keys.extend(self.project_output_keys)
+                for key, kind, format, suffix in self.library_fields:
                     name = self.values[f'project_{kind}_name'] or Path(self.values['project_path']).stem
-                    library_filename(name, kind.upper())
+                    library_filename(name, format)
             if self.keep_box.isChecked():
                 active_keys.append('individual_directory')
             for key in active_keys:
@@ -210,7 +233,8 @@ class ExportTargetsDialog(QDialog):
             self.status.setText(ui_text('无法使用所选文件：') + str(exc))
             return
         log_event('INFO', 'export.append_settings_saved',
-                  existing_formats=[fmt for key, fmt in (('schlib_target', 'SCHLIB'), ('pcblib_target', 'PCBLIB'))
+                  target=self.target,
+                  existing_formats=[fmt for key, kind, fmt, suffix in self.library_fields
                                     if self.values[key]],
                   project_selected=bool(self.values['project_path']),
                   keep_individual=self.values['keep_individual'])

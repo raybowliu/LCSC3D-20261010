@@ -128,7 +128,7 @@ window.loadLcscPart(__PART_JSON__, __REVISION_JSON__);
                           'merge_schlib', 'merge_pcblib', 'schlib_name', 'pcblib_name',
                           'kicad_symbol', 'kicad_footprint', 'kicad_merge_symbols', 'kicad_merge_footprints',
                           'export_target', 'kicad_electrical_policy', 'kicad_symbol_name', 'kicad_footprint_name',
-                          'kicad_library_mode', 'keep_kicad_symbols', 'keep_kicad_footprints',
+                          'kicad_library_mode', 'kicad_append_targets', 'keep_kicad_symbols', 'keep_kicad_footprints',
                           'keep_schlib', 'keep_pcblib', 'schlib_target', 'pcblib_target', 'project_path',
                           'library_mode', 'symbol_style', 'keep_individual', 'individual_directory', 'project_model_directory',
                           'project_schlib_directory', 'project_pcblib_directory', 'project_schlib_name', 'project_pcblib_name'})
@@ -961,7 +961,7 @@ window.loadLcscPart(__PART_JSON__, __REVISION_JSON__);
                           'merge_schlib', 'merge_pcblib', 'schlib_name', 'pcblib_name',
                           'kicad_symbol', 'kicad_footprint', 'kicad_merge_symbols', 'kicad_merge_footprints',
                           'export_target', 'kicad_electrical_policy', 'kicad_symbol_name', 'kicad_footprint_name',
-                          'kicad_library_mode', 'keep_kicad_symbols', 'keep_kicad_footprints',
+                          'kicad_library_mode', 'kicad_append_targets', 'keep_kicad_symbols', 'keep_kicad_footprints',
                           'keep_schlib', 'keep_pcblib', 'schlib_target', 'pcblib_target', 'project_path',
                           'library_mode', 'symbol_style', 'keep_individual', 'individual_directory', 'project_model_directory',
                           'project_schlib_directory', 'project_pcblib_directory', 'project_schlib_name', 'project_pcblib_name'})

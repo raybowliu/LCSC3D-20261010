@@ -539,11 +539,19 @@ class Options:
     bind_3d_models: bool = True
     kicad_3d_mode: str = 'embedded'
     ad_3d_layer: int = 1
+    export_target: str = 'ad'
+    kicad_symbol_target: str = ''
+    kicad_footprint_target: str = ''
+    project_kicad_symbol_directory: str = ''
+    project_kicad_footprint_directory: str = ''
+    project_kicad_symbol_name: str = ''
+    project_kicad_footprint_name: str = ''
 
     def __post_init__(self):
         if self.formats == ('PDF',):
             self.append_mode = self.merge_schlib = self.merge_pcblib = False
             self.schlib_target = self.pcblib_target = self.project_path = ''
+            self.kicad_symbol_target = self.kicad_footprint_target = ''
             return
         self.symbol_style = normalize_symbol_style(self.symbol_style)
         self.ad_3d_layer = validate_model_layer(self.ad_3d_layer)
@@ -554,9 +562,11 @@ class Options:
             self.kicad_merge_symbols = self.kicad_merge
         if self.kicad_merge_footprints is None:
             self.kicad_merge_footprints = self.kicad_merge
-        if any(fmt in KICAD_FORMATS for fmt in self.formats):
-            if self.append_mode:
-                raise DownloadError('KiCad 不支持追加已有库，请关闭 AD 追加模式')
+        if any(fmt in KICAD_FORMATS for fmt in self.formats) or self.kicad_symbol_target or self.kicad_footprint_target:
+            self.export_target = 'kicad'
+        if self.export_target == 'kicad':
+            if self.append_mode and (self.schlib_target or self.pcblib_target or any(fmt in self.formats for fmt in ('SCHLIB', 'PCBLIB'))):
+                raise DownloadError('KiCad 追加不能使用 AD 库，请选择 KiCad 库或工程')
             for fmt, name in self.kicad_names().items():
                 if fmt in self.formats:
                     kicad_library_name(name)
@@ -565,16 +575,22 @@ class Options:
             if targets:
                 # Selecting just one library must never generate its unselected counterpart.
                 self.formats = tuple(fmt for fmt in self.formats if fmt in ('STEP', 'OBJ', 'PDF')) + tuple(targets)
-            self.merge_schlib = 'SCHLIB' in self.formats
-            self.merge_pcblib = 'PCBLIB' in self.formats
+            self.merge_schlib = self.export_target == 'ad' and 'SCHLIB' in self.formats
+            self.merge_pcblib = self.export_target == 'ad' and 'PCBLIB' in self.formats
 
     def existing_targets(self):
+        if self.export_target == 'kicad':
+            from lcsc3d.services.output_transaction import checked_path
+            return {fmt: checked_path(Path(path).expanduser()) for fmt, path in (
+                ('KICAD_SYMBOL', self.kicad_symbol_target), ('KICAD_FOOTPRINT', self.kicad_footprint_target)) if path}
         return {fmt: Path(path).expanduser().resolve()
                 for fmt, path in (('SCHLIB', self.schlib_target), ('PCBLIB', self.pcblib_target)) if path}
 
     def kicad_names(self):
         names = {'KICAD_SYMBOL': self.kicad_symbol_name or self.kicad_library_name,
                  'KICAD_FOOTPRINT': self.kicad_footprint_name or self.kicad_library_name}
+        if self.append_mode and self.export_target == 'kicad':
+            names.update({fmt: path.stem for fmt, path in self.merged_paths().items()})
         for fmt, suffix in (('KICAD_SYMBOL', '.kicad_sym'), ('KICAD_FOOTPRINT', '.pretty')):
             if names[fmt].lower().endswith(suffix):
                 names[fmt] = names[fmt][:-len(suffix)]
@@ -603,11 +619,15 @@ class Options:
             self.output_root()  # Reject append mode without a library or project.
             root = Path(self.project_path).expanduser().resolve().parent
             name = Path(self.project_path).stem
+            outputs = (
+                ('KICAD_SYMBOL', self.project_kicad_symbol_directory, self.project_kicad_symbol_name),
+                ('KICAD_FOOTPRINT', self.project_kicad_footprint_directory, self.project_kicad_footprint_name)
+            ) if self.export_target == 'kicad' else (
+                ('SCHLIB', self.project_schlib_directory, self.project_schlib_name),
+                ('PCBLIB', self.project_pcblib_directory, self.project_pcblib_name))
             return {fmt: (Path(directory).expanduser().resolve() if directory else root)
                     / library_filename(custom_name or name, fmt)
-                    for fmt, directory, custom_name in (
-                        ('SCHLIB', self.project_schlib_directory, self.project_schlib_name),
-                        ('PCBLIB', self.project_pcblib_directory, self.project_pcblib_name))
+                    for fmt, directory, custom_name in outputs
                     if fmt in self.formats}
         return {fmt: Path(target).expanduser().resolve() if target else self.destination / library_filename(name, fmt)
                 for fmt, enabled, name, target in (('SCHLIB', self.merge_schlib, self.schlib_name, self.schlib_target),
@@ -625,7 +645,7 @@ class Options:
             return root / component_folder.name if self.keep_individual else root
         paths = self.merged_paths()
         if paths and not any(self.keeps_individual(fmt) for fmt in paths):
-            library = paths.get('SCHLIB') or paths['PCBLIB']
+            library = next(iter(paths.values()))
             return library.with_name(library.stem + '_3D')
         combined = [(fmt, keep) for fmt, merge, keep in (
             ('KICAD_SYMBOL', self.kicad_merge_symbols, self.keep_kicad_symbols),
@@ -643,13 +663,34 @@ class Options:
         # legacy API. Normal merge paths never imply an append.
         return fmt in self.existing_targets() or self.append_mode and path.exists()
 
+    def validate_targets(self):
+        for fmt, path in self.merged_paths().items():
+            if fmt in KICAD_FORMATS:
+                from lcsc3d.eda.kicad_append import read_target
+                read_target(path, fmt, allow_new=fmt not in self.existing_targets())
+            elif self.appends_to(fmt, path):
+                read_library(path, fmt)
+        if self.project_path:
+            if self.export_target == 'kicad':
+                from lcsc3d.eda.kicad_project import read_project as read_kicad_project
+                if not any(fmt in self.formats for fmt in KICAD_FORMATS):
+                    raise DownloadError('请至少选择一种 KiCad 库格式以加入工程')
+                read_kicad_project(self.project_path)
+            else:
+                if not any(fmt in self.formats for fmt in ('SCHLIB', 'PCBLIB')):
+                    raise DownloadError('请至少选择一种 AD 库格式以加入工程')
+                read_project(self.project_path)
+
 
 def library_filename(name, format):
     """Accept a filename, never a path; avoid silent rename or device writes."""
-    suffix = {'SCHLIB': '.SchLib', 'PCBLIB': '.PcbLib'}[format]
+    suffix = {'SCHLIB': '.SchLib', 'PCBLIB': '.PcbLib',
+              'KICAD_SYMBOL': '.kicad_sym', 'KICAD_FOOTPRINT': '.pretty'}[format]
     name = str(name).strip()
     if name.lower().endswith(suffix.lower()):
         name = name[:-len(suffix)]
+    if format in KICAD_FORMATS:
+        return kicad_library_name(name) + suffix
     if (not name or name.endswith((' ', '.')) or len(name.encode('utf-16le')) > 230
             or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
             or re.fullmatch(r'(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³])',
@@ -663,6 +704,9 @@ def import_existing_libraries(options, check_cancelled=lambda: None):
     targets = options.existing_targets()
     if not options.append_mode or not targets or not options.project_path:
         raise DownloadError('请在“追加”中指定已有库和 PCB 工程')
+    if options.export_target == 'kicad':
+        from lcsc3d.eda.kicad_project import add_libraries_to_project as import_kicad
+        return import_kicad(options.project_path, list(targets.values()), check_cancelled)
     for fmt, path in targets.items():
         check_cancelled()
         read_library(path, fmt)
@@ -933,9 +977,13 @@ def _download_batch(parts, options, cancelled=None, progress=None, on_result=Non
     api = api or NetworkApi(cancelled, use_cache=False)
     results = [None] * len(parts)
     tracker = BatchProgress(parts, on_progress)
-    merged_paths = options.merged_paths()
-    if options.append_mode and not merged_paths:
-        raise DownloadError('请至少选择一种 AD 库格式以加入工程')
+    all_merged_paths = options.merged_paths()
+    merged_paths = {fmt: path for fmt, path in all_merged_paths.items() if fmt not in KICAD_FORMATS}
+    if options.append_mode and not all_merged_paths:
+        raise DownloadError('请至少选择一种 ' + ('KiCad' if options.export_target == 'kicad' else 'AD') + ' 库格式以加入工程')
+    if options.export_target == 'kicad' and options.project_path:
+        from lcsc3d.eda.kicad_project import read_project as read_kicad_project
+        read_kicad_project(options.project_path)
     log_event('INFO', 'download.export_plan', mode='append' if options.append_mode else
               'merge' if merged_paths or any(fmt in options.formats and merge for fmt, merge in (
                   ('KICAD_SYMBOL', options.kicad_merge_symbols), ('KICAD_FOOTPRINT', options.kicad_merge_footprints))) else 'individual', formats=options.formats,
@@ -949,6 +997,18 @@ def _download_batch(parts, options, cancelled=None, progress=None, on_result=Non
     kicad_entries = {}
     deferred_outputs = {} if 'PCBLIB' in merged_paths else None
     originals, target_errors = {}, {}
+    kicad_targets, kicad_target_errors = {}, {}
+    for fmt, path in all_merged_paths.items():
+        if fmt in KICAD_FORMATS:
+            try:
+                from lcsc3d.eda.kicad_append import read_target
+                kicad_targets[fmt] = read_target(path, fmt, api.check_cancelled,
+                                                allow_new=fmt not in options.existing_targets())
+            except Cancelled:
+                raise
+            except Exception as exc:
+                record_error(exc, 'download.append_target_invalid', format=fmt, stage='read')
+                kicad_target_errors[fmt] = str(exc)
     for fmt, path in merged_paths.items():
         if options.appends_to(fmt, path):
             try:
@@ -1125,6 +1185,8 @@ def _download_batch(parts, options, cancelled=None, progress=None, on_result=Non
                 result.message += '；' + result.export_errors[-1]
     if kicad_entries:
         export_kicad_batch(results, kicad_entries, options, api.check_cancelled,
+                          **({'append_targets': kicad_targets, 'target_errors': kicad_target_errors}
+                             if options.append_mode and options.export_target == 'kicad' else {}),
                           on_progress=tracker.advance if on_progress else None)
     project_error = ''
     project_files = list(dict.fromkeys(file for result in results for file in result.files
@@ -1132,9 +1194,17 @@ def _download_batch(parts, options, cancelled=None, progress=None, on_result=Non
                                       and (Path(file).suffix[1:].upper() not in merged_paths or
                                            Path(file) == merged_paths[Path(file).suffix[1:].upper()])))
     import_project = options.imports_project()
+    if options.export_target == 'kicad':
+        project_files = [str(path) for fmt, path in all_merged_paths.items() if any(
+            fmt in result.completed_formats and any(Path(file) == path or
+                fmt == 'KICAD_FOOTPRINT' and Path(file).parent == path for file in result.files) for result in results)]
     if import_project and project_files and not cancelled.is_set():
         try:
-            imported = add_libraries_to_project(options.project_path, project_files, api.check_cancelled)
+            if options.export_target == 'kicad':
+                from lcsc3d.eda.kicad_project import add_libraries_to_project as import_kicad
+                imported = import_kicad(options.project_path, project_files, api.check_cancelled)
+            else:
+                imported = add_libraries_to_project(options.project_path, project_files, api.check_cancelled)
             log_event('INFO', 'download.project_completed', added=imported['added'], skipped=imported['skipped'])
         except Exception as exc:
             record_error(exc, 'library.project_import_failed')
@@ -1151,7 +1221,8 @@ def _download_batch(parts, options, cancelled=None, progress=None, on_result=Non
             result.status = ('成功' if set(result.completed_formats) == set(options.formats) and not result.export_errors else
                              '部分完成' if result.files else '已取消' if cancelled.is_set() else '失败')
             log_event('INFO', 'download.merge_result', part=safe_part(result.part), status=result.status)
-        has_libraries = any(file in project_files for file in result.files)
+        has_libraries = any(file in project_files or options.export_target == 'kicad' and
+                            str(Path(file).parent) in project_files for file in result.files)
         if import_project and has_libraries:
             if project_error or cancelled.is_set():
                 result.status = '部分完成'
