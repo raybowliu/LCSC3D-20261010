@@ -37,6 +37,7 @@ version = re.search(r"VERSION = '([^']+)'", (ROOT / 'app/lcsc3d/ui/main.py').rea
 assert report['success'] and report['frozen'] and report['version'] == version, report
 assert [c['name'] for c in report['cases']] == ['individual', 'combined', 'merge-symbols', 'merge-footprints', 'footprint-only', 'copies', 'reversed', 'ad', 'ad-layout', 'ad-replace', 'replace', 'via-ad', 'via-kicad', 'append', 'append-repeat', 'append-copies', 'append-project', 'preview-sample']
 assert report['append_import_without_download_verified'] and report['append_preserves_members_and_links_verified']
+assert report['append_empty_project_preserved_verified']
 assert report['kicad_preview_verified']
 assert report['preview_painted_pixels_verified']
 assert report['reversed_pin_preview_verified'] and report['wrapped_results_and_card_spacing_verified']

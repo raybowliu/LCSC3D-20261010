@@ -238,7 +238,7 @@ class KiCadUiTests(unittest.TestCase):
         footprint = self.root / '已有封装.pretty'
         footprint.mkdir(exist_ok=True)
         project = self.root / '工程.kicad_pro'
-        project.write_text('{"meta":{"version":1}}', 'utf-8')
+        project.write_bytes(b'{}')
         return symbol, footprint, project
 
     def test_kicad_append_click_dialog_cancel_and_mutual_exclusion_follow_ad(self):
@@ -335,7 +335,7 @@ class KiCadUiTests(unittest.TestCase):
         self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
         self.assertFalse((project.parent / 'fp-lib-table').exists())
 
-    def test_kicad_import_button_uses_unsaved_configuration_without_download_queue(self):
+    def test_kicad_import_button_uses_empty_project_and_unsaved_configuration_without_download_queue(self):
         w = self.window
         symbol, footprint, project = self.kicad_targets()
         w.export_target_box.setCurrentIndex(w.export_target_box.findData('kicad'))
@@ -355,6 +355,7 @@ class KiCadUiTests(unittest.TestCase):
         self.assertIn('新增 2', dialog.status.text())
         self.assertTrue((project.parent / 'sym-lib-table').exists())
         self.assertTrue((project.parent / 'fp-lib-table').exists())
+        self.assertEqual(project.read_bytes(), b'{}')
         self.assertEqual(w.ids, [])
         self.assertFalse(w.kicad_export_targets['kicad_symbol_target'])
         dialog.reject()

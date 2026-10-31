@@ -133,7 +133,8 @@ def start(window, folder):
                         shutil.copytree(root / 'append', output)
                     output.mkdir(parents=True, exist_ok=True)
                     project = output / '测试工程.kicad_pro'
-                    project.write_text('{"meta":{"version":1},"board":{"kept":true}}', 'utf-8')
+                    project.write_text('{}' if name in ('append', 'append-project') else
+                                       '{"meta":{"version":1},"board":{"kept":true}}', 'utf-8')
                 state.update(name=name, output=output, before=hashes(output), parts=parts)
                 window.lib_append_box.setChecked(False)
                 window.kicad_lib_append_box.setChecked(False)
@@ -249,9 +250,11 @@ def start(window, folder):
                 assert (state['output'] / 'sym-lib-table').is_file()
                 assert (state['output'] / 'fp-lib-table').is_file()
                 assert '新增 2' in window.export_dialog.status.text(), window.export_dialog.status.text()
+                assert (state['output'] / '测试工程.kicad_pro').read_bytes() == b'{}'
                 window.grab().save(str(root / 'kicad-append-settings.png'))
                 window.export_dialog.reject()
                 report['append_import_without_download_verified'] = True
+                report['append_empty_project_preserved_verified'] = True
                 state['phase'] = 'next'
             elif state['phase'] == 'wait' and not window.batch_running and not (window.worker and window.worker.isRunning()):
                 rows = [window.results[p] for p in state['parts']]

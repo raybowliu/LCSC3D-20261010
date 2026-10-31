@@ -20,7 +20,9 @@ def read_project(path):
         value = json.loads(original.decode('utf-8-sig'))
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise DownloadError('KiCad 工程格式无法识别，未修改原文件') from exc
-    if not isinstance(value, dict) or not isinstance(value.get('meta'), dict):
+    # KiCad can create a minimal project containing only {}. Metadata is
+    # optional until the editors save the project; library tables are separate.
+    if not isinstance(value, dict) or ('meta' in value and not isinstance(value['meta'], dict)):
         raise DownloadError('KiCad 工程格式无法识别，未修改原文件')
     return original
 

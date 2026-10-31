@@ -20,7 +20,7 @@ from lcsc3d.eda import library_files
 from lcsc3d.eda.easyeda_import import parse_component
 from lcsc3d.eda.kicad import FORMATS, build_library
 from lcsc3d.eda.kicad_append import read_target, publish_files
-from lcsc3d.eda.kicad_project import add_libraries_to_project
+from lcsc3d.eda.kicad_project import add_libraries_to_project, read_project
 from lcsc3d.eda.kicad_sexpr import Document
 from lcsc3d.services import backend, backups
 from test_eda_ir import fixture
@@ -209,6 +209,82 @@ class KiCadAppendTests(unittest.TestCase):
             row = backend.download_part('C2040', options, self.api)
         self.assertEqual(row.status, '已取消', row.message)
         self.assertEqual(self.snapshot(project.parent), before)
+
+    def test_projects_without_meta_import_existing_libraries_and_preserve_original_bytes(self):
+        targets = self.targets(self.root / '库')
+        before = self.snapshot(self.root / '库')
+        for index, payload in enumerate((b'{}', b'{\n}\n', b'\xef\xbb\xbf {\r\n}\r\n',
+                                         b'{"board":{},"custom":"preserved"}\r\n')):
+            with self.subTest(payload=payload):
+                project = self.project(self.root / str(index))
+                project.write_bytes(payload)
+                self.assertEqual(read_project(project), payload)
+                options = self.options(targets, (), project_path=str(project))
+                options.validate_targets()
+                imported = backend.import_existing_libraries(options)
+                self.assertEqual((imported['added'], imported['skipped']), (2, 0))
+                self.assertEqual(project.read_bytes(), payload)
+                for name, kind in (('sym-lib-table', 'sym_lib_table'), ('fp-lib-table', 'fp_lib_table')):
+                    table = Document((project.parent / name).read_bytes(), kind)
+                    self.assertEqual(len(table.root.children('lib')), 1)
+                after = self.snapshot(project.parent)
+                repeated = backend.import_existing_libraries(options)
+                self.assertEqual((repeated['added'], repeated['skipped']), (0, 2))
+                self.assertEqual(self.snapshot(project.parent), after)
+                self.assertEqual(self.snapshot(self.root / '库'), before)
+
+    def test_empty_project_only_downloads_register_selected_formats_and_preserve_project(self):
+        for index, formats in enumerate((('KICAD_SYMBOL',), ('KICAD_FOOTPRINT',), FORMATS)):
+            with self.subTest(formats=formats):
+                project = self.project(self.root / str(index))
+                project.write_bytes(b'{}')
+                options = self.options(formats=formats, project_path=str(project))
+                row = backend.download_part('C2040', options, self.api)
+                self.assertEqual(row.status, '成功', row.message)
+                self.assertEqual(set(row.completed_formats), set(formats))
+                self.assertEqual(project.read_bytes(), b'{}')
+                self.assertEqual((project.parent / 'sym-lib-table').is_file(), 'KICAD_SYMBOL' in formats)
+                self.assertEqual((project.parent / 'fp-lib-table').is_file(), 'KICAD_FOOTPRINT' in formats)
+
+    def test_invalid_project_json_or_metadata_never_changes_project_or_libraries(self):
+        targets = self.targets(self.root / '库')
+        before = self.snapshot(self.root / '库')
+        payloads = (b'', b' ', b'{', b'[]', b'null', b'"project"', b'1', b'true', b'\xff{}',
+                    b'{"meta":null}', b'{"meta":[]}', b'{"meta":"invalid"}', b'{"meta":1}',
+                    b'{"meta":false}')
+        for index, payload in enumerate(payloads):
+            with self.subTest(payload=payload):
+                project = self.project(self.root / str(index))
+                project.write_bytes(payload)
+                with self.assertRaisesRegex(DownloadError, '工程格式无法识别'):
+                    backend.import_existing_libraries(self.options(targets, (), project_path=str(project)))
+                self.assertEqual(self.snapshot(project.parent), {project: payload})
+                self.assertEqual(self.snapshot(self.root / '库'), before)
+
+    def test_project_validation_errors_are_logged_and_empty_project_import_can_recover(self):
+        from lcsc3d.core import app_logging
+        from lcsc3d.core.app_paths import data_directory
+        log_dir = data_directory() / 'logs'
+        app_logging.configure_logging(version='test', directory=log_dir)
+        targets = self.targets(self.root / '库')
+        project = self.project(self.root / '工程')
+        project.write_bytes(b'[]')
+        options = self.options(targets, (), project_path=str(project))
+        with self.assertRaises(DownloadError):
+            backend.import_existing_libraries(options)
+        entries = [json.loads(line) for line in (log_dir / 'LCSC3D.log').read_text('utf-8').splitlines()]
+        error = next(entry for entry in entries if entry['event'] == 'library.kicad_project_import.failed')
+        self.assertEqual(error['error'], 'DownloadError')
+        self.assertTrue(error['error_id'])
+        self.assertTrue(any(frame['file'] == 'kicad_project.py' and frame['function'] == 'read_project'
+                            for frame in error['frames']))
+        project.write_bytes(b'{}')
+        imported = backend.import_existing_libraries(options)
+        self.assertEqual(imported['added'], 2)
+        self.assertEqual(project.read_bytes(), b'{}')
+        entries = [json.loads(line) for line in (log_dir / 'LCSC3D.log').read_text('utf-8').splitlines()]
+        registered = next(entry for entry in entries if entry['event'] == 'library.kicad_project_registered')
+        self.assertEqual((registered['added'], registered['tables']), (2, 2))
 
     def test_import_existing_tables_preserve_unknown_bytes_skip_duplicates_and_back_up(self):
         targets = self.targets(self.root / '库')
