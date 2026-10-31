@@ -17,6 +17,8 @@ from local_update_server import serve_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'app'))
+from lcsc3d.core.versions import version_order
 
 
 def file_hash(path):
@@ -106,7 +108,7 @@ def main():
     current = args.current_version or (version if args.scenario == 'no-update' else previous_version(version))
     if not all(re.fullmatch(r'\d+\.\d+\.\d+', value) for value in (version, current)):
         parser.error('Versions must use X.Y.Z')
-    newer = tuple(map(int, version.split('.'))) > tuple(map(int, current.split('.')))
+    newer = version_order(version) > version_order(current)
     if (args.scenario == 'no-update' and newer) or (args.scenario != 'no-update' and not newer):
         parser.error('Update scenarios need a newer target; no-update needs a target no newer than current')
     source = args.exe.resolve(strict=True)

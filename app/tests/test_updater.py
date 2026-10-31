@@ -21,11 +21,12 @@ SHA = hashlib.sha256(NEW).hexdigest()
 PREFIX = f'https://github.com/{updater.REPOSITORY}/releases/download/v2.1.0/'
 
 
-def release_data():
-    return {'tag_name': 'v2.1.0', 'draft': False, 'prerelease': False, 'body': 'Release notes',
-            'assets': [{'name': 'LCSC3D.exe', 'browser_download_url': PREFIX + 'LCSC3D.exe',
+def release_data(version='2.1.0'):
+    prefix = f'https://github.com/{updater.REPOSITORY}/releases/download/v{version}/'
+    return {'tag_name': f'v{version}', 'draft': False, 'prerelease': False, 'body': 'Release notes',
+            'assets': [{'name': 'LCSC3D.exe', 'browser_download_url': prefix + 'LCSC3D.exe',
                         'size': len(NEW), 'digest': 'sha256:' + SHA},
-                       {'name': 'SHA256SUMS.txt', 'browser_download_url': PREFIX + 'SHA256SUMS.txt'}]}
+                       {'name': 'SHA256SUMS.txt', 'browser_download_url': prefix + 'SHA256SUMS.txt'}]}
 
 
 class Response(io.BytesIO):
@@ -103,6 +104,27 @@ class UpdateTests(unittest.TestCase):
         data['assets'][0]['browser_download_url'] = 'https://github.com/someone/other/releases/download/v2.1.0/LCSC3D.exe'
         with self.assertRaises(updater.UpdateError):
             updater.parse_release(data, '2.0.0')
+
+    def test_historical_releases_follow_publication_order_without_downgrades(self):
+        versions = ('2.4.3', '2.4.4', '2.4.41', '2.4.42', '2.4.5', '2.4.6', '2.4.10',
+                    '2.4.40', '2.4.43', '2.5.0', '2.10.0', '3.0.0')
+        for current_index, current in enumerate(versions):
+            for target_index, target in enumerate(versions):
+                with self.subTest(current=current, target=target):
+                    release = updater.parse_release(release_data(target), current)
+                    self.assertEqual(release is not None, target_index > current_index)
+                    if release is not None:
+                        self.assertEqual(release.version, target)
+                        self.assertEqual(release.exe_url,
+                                         f'https://github.com/{updater.REPOSITORY}/releases/download/v{target}/LCSC3D.exe')
+
+    def test_historical_demo_and_prefixed_versions_keep_stable_upgrade_rules(self):
+        for current in ('2.4.41', 'v2.4.42', '2.4.42-demo.1', 'v2.4.42-demo.2'):
+            with self.subTest(current=current):
+                self.assertEqual(updater.parse_release(release_data('2.4.5'), current).version, '2.4.5')
+        self.assertEqual(updater.parse_release(release_data('2.4.42'), '2.4.42-demo.1').version, '2.4.42')
+        self.assertIsNone(updater.parse_release(release_data('2.4.41'), '2.4.42-demo.1'))
+        self.assertIsNone(updater.parse_release(release_data('2.4.42'), '2.4.5-demo.1'))
 
     def test_demo_can_upgrade_to_same_version_stable_without_downgrading(self):
         self.assertEqual(updater.parse_release(release_data(), '2.1.0-demo.1').version, '2.1.0')

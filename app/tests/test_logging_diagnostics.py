@@ -440,6 +440,28 @@ faulthandler._sigsegv()
             manifest = client.download(release,target)
         return manifest,target
 
+    def test_update_logs_explain_legacy_order_same_version_and_rejected_downgrade(self):
+        client = updater.UpdateClient()
+        for current, target, outcome in (('2.4.42', '2.4.5', 'available'),
+                                         ('2.4.5', '2.4.5', 'same_version'),
+                                         ('2.4.5', '2.4.42', 'older_release')):
+            with self.subTest(current=current, target=target), \
+                    patch.object(client, '_read', return_value=json.dumps(release_data(target)).encode()):
+                release = client.check(current)
+                self.assertEqual(release is not None, outcome == 'available')
+                row = self.entries('update.version_compared')[-1]
+                self.assertEqual(row['current_version'], current)
+                self.assertEqual(row['release_version'], 'v' + target)
+                self.assertEqual(row['current_order'], list(updater.version_order(current)))
+                self.assertEqual(row['release_order'], list(updater.version_order(target)))
+                self.assertEqual(row['outcome'], outcome)
+                self.assertEqual(self.entries('update.check_result')[-1]['release_version'], 'v' + target)
+        with patch.object(client, '_read', return_value=b'{invalid'), self.assertRaises(updater.UpdateError):
+            client.check('2.4.5')
+        row = self.entries('update.check.failed')[-1]
+        self.assert_cause(row, 'JSONDecodeError')
+        self.assertEqual(row['current_version'], '2.4.5')
+
     def test_update_helper_logs_phases_and_rollback_with_parent_correlation(self):
         manifest,target = self.stage_update()
         original = self.entries('update.verified')[0]

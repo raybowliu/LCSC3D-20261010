@@ -21,6 +21,7 @@ from urllib3.util import Retry, Timeout
 
 from lcsc3d.services.backend import connection_pool
 from lcsc3d.core.errors import Cancelled
+from lcsc3d.core.versions import UpdateError, version_order, version_tuple
 from lcsc3d.core.app_settings import proxy_for_url, proxy_mode, initial_log_level
 from lcsc3d.core.app_logging import (log_event, record_error, traced, current_context, log_context,
                          configure_logging, network_target)
@@ -33,10 +34,6 @@ STAGE_PREFIX = '.LCSC3D-update-'
 MAX_EXE_SIZE = 1024 * 1024 * 1024
 DOWNLOAD_HOSTS = {'api.github.com', 'github.com', 'release-assets.githubusercontent.com',
                   'objects.githubusercontent.com', 'github-releases.githubusercontent.com'}
-
-
-class UpdateError(Exception):
-    pass
 
 
 @dataclass(frozen=True)
@@ -74,12 +71,6 @@ class LocalUpdateSource:
         return arguments
 
 
-def version_tuple(version: str) -> tuple[int, int, int]:
-    if not isinstance(version, str) or not re.fullmatch(r'v?\d+\.\d+\.\d+', version):
-        raise UpdateError('发行版本号无效，需要正式版本 vX.Y.Z')
-    return tuple(int(value) for value in version.lstrip('v').split('.'))
-
-
 @dataclass(frozen=True)
 class Release:
     version: str
@@ -95,10 +86,14 @@ def parse_release(data, current_version: str, *, source: LocalUpdateSource | Non
     if not isinstance(data, dict) or data.get('draft') or data.get('prerelease'):
         raise UpdateError('更新接口没有返回正式发行版本')
     tag = data.get('tag_name')
-    version = version_tuple(tag)
+    version = version_order(tag)
     demo = isinstance(current_version, str) and re.fullmatch(r'v?\d+\.\d+\.\d+-demo\.\d+', current_version)
-    current = version_tuple(current_version.split('-')[0] if demo else current_version)
-    if version < current or (version == current and not demo):
+    current = version_order(current_version.split('-')[0] if demo else current_version)
+    available = version > current or (version == current and bool(demo))
+    log_event('INFO', 'update.version_compared', current_version=current_version, release_version=tag,
+              current_order=current, release_order=version,
+              outcome='available' if available else 'same_version' if version == current else 'older_release')
+    if not available:
         return None
     base = source.origin if source is not None else f'https://github.com/{REPOSITORY}'
     prefix = f'{base}/releases/download/{quote(tag, safe="")}/'
@@ -218,7 +213,8 @@ class UpdateClient:
         result = parse_release(data, comparison, source=self.source)
         log_event('INFO', 'update.source_selected', source_kind='local_test' if self.source is not None else 'github',
                   actual_version=current_version, compared_version=comparison)
-        log_event('INFO', 'update.check_result', available=result is not None, target_version=result.version if result else None)
+        log_event('INFO', 'update.check_result', available=result is not None,
+                  release_version=data.get('tag_name'), target_version=result.version if result else None)
         return result
 
     @traced('update.download', lambda self, release, *a, **kw: {'target_version': release.version}, level='INFO')
