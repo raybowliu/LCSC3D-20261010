@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -14,7 +13,6 @@ from PySide6.QtWidgets import QApplication
 from lcsc3d.ui import main
 from lcsc3d.core.app_logging import close_logging
 from lcsc3d.ui.export_targets import ExportTargetsDialog
-from PySide6.QtTest import QTest
 
 
 class KiCadUiTests(unittest.TestCase):
@@ -49,6 +47,10 @@ class KiCadUiTests(unittest.TestCase):
 
     def close_windows(self):
         for window in reversed(self.windows):
+            if window.worker and window.worker.isRunning():
+                window.worker.cancelled.set()
+                self.assertTrue(window.worker.wait(30000), 'Import worker did not stop before window cleanup')
+                self.app.processEvents()
             window.settings_enabled = False
             window.close()
             window.deleteLater()
@@ -346,9 +348,8 @@ class KiCadUiTests(unittest.TestCase):
         dialog.inputs['kicad_footprint_target'].setText(str(footprint))
         dialog.inputs['project_path'].setText(str(project))
         dialog.import_button.click()
-        deadline = time.monotonic() + 8
-        while w.worker and w.worker.isRunning() and time.monotonic() < deadline:
-            QTest.qWait(15)
+        self.assertIsNotNone(w.worker)
+        self.assertTrue(w.worker.wait(30000), 'Project library import did not finish within 30 seconds')
         self.app.processEvents()
         self.assertFalse(w.batch_running)
         self.assertTrue(dialog.import_button.isEnabled())
